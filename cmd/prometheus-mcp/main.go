@@ -193,7 +193,8 @@ func main() {
 	// Optionally load HTTP config file to configure HTTP client for Prometheus API.
 	rt, err := getRoundTripperFromConfig(*flagHTTPConfig)
 	if err != nil {
-		logger.Error("Failed to load HTTP config file, using default HTTP round tripper", "err", err)
+		logger.Error("Failed to load HTTP config file", "file", *flagHTTPConfig, "err", err)
+		os.Exit(1) //nolint:gocritic
 	}
 
 	ctx, rootCtxCancel := context.WithCancel(context.Background())
@@ -226,7 +227,7 @@ func main() {
 
 		// Explicitly cancel context before exit.
 		rootCtxCancel()
-		os.Exit(1) //nolint:gocritic
+		os.Exit(1)
 	}
 	srv := initHTTPServer(logger, mcpContainer)
 

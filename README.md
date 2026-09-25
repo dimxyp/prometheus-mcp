@@ -279,6 +279,7 @@ _Note_: While packages are built for several systems, there are currently no pla
 The MCP server supports [Prometheus HTTP config](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#http_config) files to connect to secured Prometheus instances.
 An example config can be found [in the examples folder here](./examples/http-config.yml).
 Use the `--http.config` command-line flag to provide an HTTP configuration file.
+If the file cannot be read or is invalid, the server exits at startup instead of falling back to an unauthenticated client.
 Please see [Flags](#command-line-flags) for more information.
 
 ### Forwarding Client Credentials
