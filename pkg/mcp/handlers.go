@@ -1060,7 +1060,7 @@ func (s *ServerContainer) doHTTPRequest(ctx context.Context, method string, rt h
 	// Reuse the cached client for the default transport to share its idle
 	// connection pool. For auth-overridden transports create a one-off client.
 	var httpClient *http.Client
-	if s.defaultHTTPClient.Transport != nil && rt == s.defaultHTTPClient.Transport {
+	if rt == s.defaultHTTPClient.Transport {
 		httpClient = &s.defaultHTTPClient
 	} else {
 		httpClient = &http.Client{Transport: rt}
