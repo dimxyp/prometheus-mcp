@@ -72,7 +72,7 @@ var (
 	metricToolCallsFailed = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: prometheus.BuildFQName(metrics.MetricNamespace, "tool", "calls_failed_total"),
-			Help: "Total number of failures per tool.",
+			Help: "Total number of failures per tool. Calls canceled by the client are not counted.",
 		},
 		[]string{"tool_name"},
 	)

@@ -324,7 +324,7 @@ Please see [Flags](#command-line-flags) for more information on how to change th
 | `prom_mcp_server_ready` | `Gauge` | Info metric with a static '1' if the MCP server is ready, and '0' otherwise. | |
 | `prom_mcp_api_calls_failed_total` | `Counter` | Total number of Prometheus API failures, per endpoint. | `target_path` |
 | `prom_mcp_api_call_duration_seconds` | `Histogram` | Duration of Prometheus API calls, per endpoint, in seconds. | `target_path` |
-| `prom_mcp_tool_calls_failed_total` | `Counter` | Total number of failures per tool. | `tool_name` |
+| `prom_mcp_tool_calls_failed_total` | `Counter` | Total number of failures per tool. Calls canceled by the client are not counted. | `tool_name` |
 | `prom_mcp_tool_call_duration_seconds` | `Histogram` | Duration of tool calls, per tool, in seconds. | `tool_name` |
 | `prom_mcp_resource_calls_failed_total` | `Counter` | Total number of failures per resource. | `resource_uri` |
 | `prom_mcp_resource_call_duration_seconds` | `Histogram` | Duration of resource calls, per resource, in seconds. | `resource_uri` |

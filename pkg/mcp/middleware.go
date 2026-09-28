@@ -15,6 +15,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -166,6 +167,14 @@ func telemetryHandleToolCall(ctx context.Context, method string, req mcp.Request
 
 	metricToolCallDuration.WithLabelValues(toolName).Observe(duration.Seconds())
 	logger.Debug("Finished calling tool", "duration", duration)
+
+	// A canceled request context means the client disconnected or sent an
+	// explicit notifications/cancelled while the call was in flight. This
+	// is not a failure, so it is neither counted as one nor logged as an error.
+	if errors.Is(ctx.Err(), context.Canceled) {
+		logger.Debug("Tool call canceled by client", "error", err)
+		return result, err
+	}
 
 	// Protocol level failure; this is an unknown tool, a handler returning
 	// *jsonrpc.Error, or an output marshalling failure. This results in a

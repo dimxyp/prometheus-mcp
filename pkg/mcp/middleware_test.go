@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/prometheus/common/promslog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -417,8 +419,11 @@ func TestTelemetryHandleToolCall(t *testing.T) {
 		nextResult    mcp.Result
 		nextErr       error
 		wantLogged    string
-		wantLogFields []string // additional substrings expected in log output (structured field values)
+		wantLogFields []string
+		wantNotLogged []string
 		wantErr       bool
+		cancelCtx     bool
+		toolName      string
 	}{
 		{
 			name: "successful tool call logs tool name and duration",
@@ -498,6 +503,31 @@ func TestTelemetryHandleToolCall(t *testing.T) {
 			wantLogged: "Failed to extract tool params for telemetry",
 			wantErr:    false,
 		},
+		{
+			name:          "client cancellation surfacing the context error is not a failure",
+			req:           mockRequest(&mcp.CallToolParamsRaw{Name: "canceled_ctx_err"}),
+			nextResult:    nil,
+			nextErr:       context.Canceled,
+			cancelCtx:     true,
+			toolName:      "canceled_ctx_err",
+			wantLogged:    "Tool call canceled by client",
+			wantNotLogged: []string{"Failed calling tool"},
+			wantErr:       true,
+		},
+		{
+			name: "client cancellation wrapped into a tool error result is not a failure",
+			req:  mockRequest(&mcp.CallToolParamsRaw{Name: "canceled_is_error"}),
+			nextResult: &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{Text: "context canceled"}},
+				IsError: true,
+			},
+			nextErr:       nil,
+			cancelCtx:     true,
+			toolName:      "canceled_is_error",
+			wantLogged:    "Tool call canceled by client",
+			wantNotLogged: []string{"Failed calling tool"},
+			wantErr:       false,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -507,13 +537,19 @@ func TestTelemetryHandleToolCall(t *testing.T) {
 
 			logger, buf := newTestLogger()
 
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
 			nextCalled := false
 			next := func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 				nextCalled = true
+				if tc.cancelCtx {
+					cancel()
+				}
 				return tc.nextResult, tc.nextErr
 			}
 
-			result, err := telemetryHandleToolCall(context.Background(), methodToolsCall, tc.req, next, logger)
+			result, err := telemetryHandleToolCall(ctx, methodToolsCall, tc.req, next, logger)
 
 			require.True(t, nextCalled, "expected next handler to be called")
 
@@ -529,6 +565,14 @@ func TestTelemetryHandleToolCall(t *testing.T) {
 			require.Contains(t, output, tc.wantLogged)
 			for _, field := range tc.wantLogFields {
 				require.Contains(t, output, field, "expected structured log field value %q in output", field)
+			}
+			for _, s := range tc.wantNotLogged {
+				require.NotContains(t, output, s)
+			}
+			if tc.cancelCtx {
+				counter := metricToolCallsFailed.With(prometheus.Labels{"tool_name": tc.toolName})
+				require.Zero(t, testutil.ToFloat64(counter),
+					"client cancellation must not count as a tool failure")
 			}
 		})
 	}
