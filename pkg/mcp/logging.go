@@ -40,7 +40,8 @@ func getClientLogger(req *mcp.CallToolRequest, loggerName string) *slog.Logger {
 		return nil
 	}
 
-	return slog.New(mcp.NewLoggingHandler(serverSession, &mcp.LoggingHandlerOptions{
+	// MCP logging is deprecated as of protocol 2026-07-28 (SEP-2577).
+	return slog.New(mcp.NewLoggingHandler(serverSession, &mcp.LoggingHandlerOptions{ //nolint:staticcheck // SA1019: SEP-2577 deprecation window
 		LoggerName:  loggerName,
 		MinInterval: clientLoggingInterval,
 	}))

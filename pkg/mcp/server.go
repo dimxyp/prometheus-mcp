@@ -192,8 +192,10 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*mcp.Server, *ServerConta
 	// discover the skill:// resources. Logging is pinned explicitly
 	// because a non-nil Capabilities overrides the SDK's historical
 	// {"logging":{}} default; the remaining capabilities are still
-	// inferred from the registered features.
-	caps := &mcp.ServerCapabilities{Logging: &mcp.LoggingCapabilities{}}
+	// inferred from the registered features. Logging is deprecated as
+	// of protocol 2026-07-28 (SEP-2577) but supported for the
+	// deprecation window.
+	caps := &mcp.ServerCapabilities{Logging: &mcp.LoggingCapabilities{}} //nolint:staticcheck // SA1019: SEP-2577 deprecation window
 	caps.AddExtension(skillsExtensionCapability, nil)
 
 	server := mcp.NewServer(
