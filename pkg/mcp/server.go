@@ -199,14 +199,18 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*mcp.Server, *ServerConta
 		instrx = "Prometheus MCP Server"
 	}
 
-	// Declare the SEP-2640 skills extension so skill-aware hosts can
-	// discover the skill:// resources. Logging is pinned explicitly
-	// because a non-nil Capabilities overrides the SDK's historical
-	// {"logging":{}} default; the remaining capabilities are still
-	// inferred from the registered features. Logging is deprecated as
-	// of protocol 2026-07-28 (SEP-2577) but supported for the
-	// deprecation window.
-	caps := &mcp.ServerCapabilities{Logging: &mcp.LoggingCapabilities{}} //nolint:staticcheck // SA1019: SEP-2577 deprecation window
+	// The catalog never changes after startup, so pin the capabilities
+	// empty: nil ones are inferred as listChanged:true, and 2026-07-28
+	// clients would hold a subscriptions/listen stream open for nothing.
+	// Logging is pinned since a non-nil Capabilities drops the SDK default;
+	// it is deprecated (SEP-2577) but still served. SEP-2640 exposes the
+	// skill:// resources to skill-aware hosts.
+	caps := &mcp.ServerCapabilities{
+		Tools:     &mcp.ToolCapabilities{},
+		Prompts:   &mcp.PromptCapabilities{},
+		Resources: &mcp.ResourceCapabilities{},
+		Logging:   &mcp.LoggingCapabilities{}, //nolint:staticcheck // SA1019: SEP-2577 deprecation window
+	}
 	caps.AddExtension(skillsExtensionCapability, nil)
 
 	// Keep alive doesn't work over stateless http.

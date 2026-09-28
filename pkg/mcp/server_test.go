@@ -50,7 +50,8 @@ func newTestHTTPServer(t *testing.T) *httptest.Server {
 }
 
 // TestStreamableHTTPHandler_NegotiatesModernProtocol pins what the handler
-// hands a 2026-07-28 client: the revision and the instructions blob.
+// hands a 2026-07-28 client: the revision, the instructions blob, and the
+// advertised capabilities.
 func TestStreamableHTTPHandler_NegotiatesModernProtocol(t *testing.T) {
 	t.Parallel()
 
@@ -65,6 +66,14 @@ func TestStreamableHTTPHandler_NegotiatesModernProtocol(t *testing.T) {
 	require.Equal(t, protocolVersionModern, session.InitializeResult().ProtocolVersion)
 
 	require.NotEmpty(t, session.InitializeResult().Instructions)
+
+	caps := session.InitializeResult().Capabilities
+	require.NotNil(t, caps.Tools)
+	require.False(t, caps.Tools.ListChanged, "tools must not advertise listChanged")
+	require.NotNil(t, caps.Prompts)
+	require.False(t, caps.Prompts.ListChanged, "prompts must not advertise listChanged")
+	require.NotNil(t, caps.Resources)
+	require.False(t, caps.Resources.ListChanged, "resources must not advertise listChanged")
 
 	tools, err := session.ListTools(ctx, nil)
 	require.NoError(t, err)
