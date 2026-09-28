@@ -97,6 +97,7 @@ func TestGetClientLogger(t *testing.T) {
 				require.NoError(t, err)
 				got := string(raw)
 				require.Contains(t, got, "triggering Prometheus configuration reload")
+				require.Contains(t, got, "reload completed successfully")
 			})
 		}
 	})
