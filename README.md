@@ -211,6 +211,22 @@ For example:
 
 Please check the documentation for the tool being used/integrated for specific instructions and level of support.
 
+### Transports
+
+The server speaks MCP over `stdio` (the default) or HTTP (`--mcp.transport=http`, served at `/mcp` on the web listen address).
+Every MCP protocol revision is supported; the client picks one during its handshake.
+
+The HTTP transport is stateless: each request is handled on its own and no session is tracked, so replicas can sit behind any load balancer without session affinity.
+What follows from that:
+
+- Only `POST` is served. The standalone `GET` stream some clients open answers `405 Method Not Allowed`, which is harmless: everything the server sends rides the response to a request.
+- Keepalive pings (`--mcp.keepalive-interval`) are only sent on `stdio`; there is no session to ping over HTTP.
+- A client that disconnects mid-call cancels the in-flight Prometheus query on current MCP revisions; older clients' calls run to completion.
+- `--mcp.session-timeout` is deprecated and ignored.
+
+`--mcp.enable-client-logging` forwards the log lines tool handlers emit to the client as MCP log notifications, in addition to the normal log output.
+MCP has deprecated this feature. It keeps working during the deprecation window, but what a client receives is up to the client: newer clients must ask for a log level, and older clients over HTTP get `info` and above.
+
 ### Binary
 Download a release appropriate for your system from the [Releases](https://github.com/tjhop/prometheus-mcp-server/releases) page.
 Please see [Flags](#command-line-flags) for more information on the available flags and their corresponding environment variables.
@@ -234,7 +250,7 @@ docker run --rm -i -e PROMETHEUS_MCP_SERVER_PROMETHEUS_URL="https://$yourPrometh
 ```
 
 ```shell
-# Streamable HTTP transport (capable of SSE as well)
+# HTTP transport
 docker run --rm -p 8080:8080 ghcr.io/tjhop/prometheus-mcp-server:latest --prometheus.url "https://$yourPrometheus:9090" --mcp.transport "http" --web.listen-address ":8080"
 
 # or using env vars
@@ -440,14 +456,14 @@ Project targets:
 The available command line flags are documented in the help flag:
 
 ```bash
-~/go/src/github.com/tjhop/prometheus-mcp-server (main [ ]) -> ./prometheus-mcp-server --help
-usage: prometheus-mcp-server [<flags>]
+~/go/src/github.com/prometheus/prometheus-mcp (main [ ]) -> ./prometheus-mcp --help
+usage: prometheus-mcp [<flags>]
 
 
 Flags:
   -h, --[no-]help                Show context-sensitive help (also
                                  try --help-long and --help-man).
-                                 ($PROMETHEUS_MCP_SERVER_HELP)
+                                 ($PROMETHEUS_MCP_HELP)
       --mcp.tools=all ...        List of mcp tools to load. The target
                                  `all` can be used to load all tools.
                                  The target `core` loads only the core tools:
@@ -456,11 +472,11 @@ Flags:
                                  of tools to load, in addition to the core
                                  tools. Please see project README for more
                                  information and the full list of tools.
-                                 ($PROMETHEUS_MCP_SERVER_MCP_TOOLS)
+                                 ($PROMETHEUS_MCP_MCP_TOOLS)
       --[no-]mcp.enable-toon-output  
                                  Enable Token-Oriented Object Notation
                                  (TOON) output for tools instead of JSON
-                                 ($PROMETHEUS_MCP_SERVER_MCP_ENABLE_TOON_OUTPUT)
+                                 ($PROMETHEUS_MCP_MCP_ENABLE_TOON_OUTPUT)
       --[no-]mcp.enable-client-logging  
                                  Enable sending log messages to connected
                                  MCP clients as protocol notifications.
@@ -468,20 +484,20 @@ Flags:
                                  sent both to the server's primary
                                  log output and to the MCP client,
                                  allowing LLMs to observe server activity.
-                                 ($PROMETHEUS_MCP_SERVER_MCP_ENABLE_CLIENT_LOGGING)
+                                 ($PROMETHEUS_MCP_MCP_ENABLE_CLIENT_LOGGING)
       --mcp.transport="stdio"    The type of transport to use for
                                  the MCP server [`stdio`, `http`].
-                                 ($PROMETHEUS_MCP_SERVER_MCP_TRANSPORT)
+                                 ($PROMETHEUS_MCP_MCP_TRANSPORT)
       --prometheus.backend=PROMETHEUS.BACKEND  
                                  Customize the toolset for a specific
                                  Prometheus API compatible backend.
                                  Supported backends include: prometheus,thanos
-                                 ($PROMETHEUS_MCP_SERVER_PROMETHEUS_BACKEND)
+                                 ($PROMETHEUS_MCP_PROMETHEUS_BACKEND)
       --prometheus.url="http://127.0.0.1:9090"  
                                  URL of the Prometheus instance to connect to
-                                 ($PROMETHEUS_MCP_SERVER_PROMETHEUS_URL)
+                                 ($PROMETHEUS_MCP_PROMETHEUS_URL)
       --prometheus.timeout=1m    Timeout for API calls to the Prometheus backend
-                                 ($PROMETHEUS_MCP_SERVER_PROMETHEUS_TIMEOUT)
+                                 ($PROMETHEUS_MCP_PROMETHEUS_TIMEOUT)
       --prometheus.truncation-limit=0  
                                  If enabled, this controls the maximum query
                                  response size in number of lines/entries
@@ -490,16 +506,15 @@ Flags:
                                  needed on a per-tool-call basis via tool
                                  request arguments on supported tools.
                                  To disable truncation limits, set to 0.
-                                 ($PROMETHEUS_MCP_SERVER_PROMETHEUS_TRUNCATION_LIMIT)
-      --http.config=HTTP.CONFIG  Path to config file to set
-                                 Prometheus HTTP client options
-                                 ($PROMETHEUS_MCP_SERVER_HTTP_CONFIG)
+                                 ($PROMETHEUS_MCP_PROMETHEUS_TRUNCATION_LIMIT)
+      --http.config=HTTP.CONFIG  Path to config file to set Prometheus HTTP
+                                 client options ($PROMETHEUS_MCP_HTTP_CONFIG)
       --web.telemetry-path="/metrics"  
                                  Path under which to expose metrics.
-                                 ($PROMETHEUS_MCP_SERVER_WEB_TELEMETRY_PATH)
+                                 ($PROMETHEUS_MCP_WEB_TELEMETRY_PATH)
       --web.max-requests=40      Maximum number of parallel scrape
                                  requests. Use 0 to disable.
-                                 ($PROMETHEUS_MCP_SERVER_WEB_MAX_REQUESTS)
+                                 ($PROMETHEUS_MCP_WEB_MAX_REQUESTS)
       --[no-]dangerous.enable-tsdb-admin-tools  
                                  Enable and allow using tools that access
                                  Prometheus' TSDB Admin API endpoints
@@ -510,33 +525,42 @@ Flags:
                                  of this MCP server if the LLM you're
                                  connected to nukes all your data. Docs:
                                  https://prometheus.io/docs/prometheus/latest/querying/api/#tsdb-admin-apis
-                                 ($PROMETHEUS_MCP_SERVER_DANGEROUS_ENABLE_TSDB_ADMIN_TOOLS)
+                                 ($PROMETHEUS_MCP_DANGEROUS_ENABLE_TSDB_ADMIN_TOOLS)
+      --mcp.keepalive-interval=30s  
+                                 Interval between keepalive pings on
+                                 the stdio transport; the session is
+                                 closed when the peer stops answering.
+                                 Not used by the HTTP transport.
+                                 ($PROMETHEUS_MCP_MCP_KEEPALIVE_INTERVAL)
+      --mcp.session-timeout=10m  Deprecated and ignored: HTTP is served
+                                 statelessly. Will be removed in a future
+                                 release. ($PROMETHEUS_MCP_MCP_SESSION_TIMEOUT)
       --[no-]docs.auto-update    Enable automatic documentation updates
                                  from the official prometheus/docs
                                  repository. Checks every 24h0m0s.
-                                 ($PROMETHEUS_MCP_SERVER_DOCS_AUTO_UPDATE)
+                                 ($PROMETHEUS_MCP_DOCS_AUTO_UPDATE)
       --log.file=LOG.FILE        The name of the file to log to (file
                                  rotation policies should be configured
                                  with external tools like logrotate)
-                                 ($PROMETHEUS_MCP_SERVER_LOG_FILE)
+                                 ($PROMETHEUS_MCP_LOG_FILE)
       --[no-]web.systemd-socket  Use systemd socket activation listeners
                                  instead of port listeners (Linux only).
-                                 ($PROMETHEUS_MCP_SERVER_WEB_SYSTEMD_SOCKET)
+                                 ($PROMETHEUS_MCP_WEB_SYSTEMD_SOCKET)
       --web.listen-address=:8080 ...  
                                  Addresses on which to expose metrics and
                                  web interface. Repeatable for multiple
                                  addresses. Examples: `:9100` or `[::1]:9100`
                                  for http, `vsock://:9100` for vsock
-                                 ($PROMETHEUS_MCP_SERVER_WEB_LISTEN_ADDRESS)
+                                 ($PROMETHEUS_MCP_WEB_LISTEN_ADDRESS)
       --web.config.file=""       Path to configuration file that can
                                  enable TLS or authentication. See:
                                  https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md
-                                 ($PROMETHEUS_MCP_SERVER_WEB_CONFIG_FILE)
+                                 ($PROMETHEUS_MCP_WEB_CONFIG_FILE)
       --log.level=info           Only log messages with the given severity
                                  or above. One of: [debug, info, warn, error]
-                                 ($PROMETHEUS_MCP_SERVER_LOG_LEVEL)
+                                 ($PROMETHEUS_MCP_LOG_LEVEL)
       --log.format=logfmt        Output format of log messages. One of: [logfmt,
-                                 json] ($PROMETHEUS_MCP_SERVER_LOG_FORMAT)
+                                 json] ($PROMETHEUS_MCP_LOG_FORMAT)
       --[no-]version             Show application version.
-                                 ($PROMETHEUS_MCP_SERVER_VERSION)
+                                 ($PROMETHEUS_MCP_VERSION)
 ```
