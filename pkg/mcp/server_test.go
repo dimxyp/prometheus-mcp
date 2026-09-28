@@ -27,6 +27,7 @@ import (
 // The go-sdk does not export its protocol version strings.
 const (
 	protocolVersionModern = "2026-07-28"
+	protocolVersionLegacy = "2025-11-25"
 )
 
 // newTestHTTPServer starts the MCP server behind the streamable HTTP

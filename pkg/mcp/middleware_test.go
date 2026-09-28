@@ -87,6 +87,22 @@ func TestTelemetryMiddleware_Routing(t *testing.T) {
 			expectNextCall: true,
 		},
 		{
+			name:   "server/discover method dispatches to discover handler",
+			method: methodServerDiscover,
+			req: mockRequest(&mcp.DiscoverParams{
+				Meta: mcp.Meta{
+					mcp.MetaKeyProtocolVersion: protocolVersionModern,
+					mcp.MetaKeyClientInfo:      &mcp.Implementation{Name: "test-client", Version: "0.1"},
+				},
+			}),
+			nextResult: &mcp.DiscoverResult{
+				SupportedVersions: []string{protocolVersionModern, protocolVersionLegacy},
+			},
+			nextErr:        nil,
+			wantLogged:     "MCP server discovered",
+			expectNextCall: true,
+		},
+		{
 			name:   "tools/call method dispatches to tool call handler",
 			method: methodToolsCall,
 			req: mockRequest(&mcp.CallToolParamsRaw{
@@ -280,7 +296,107 @@ func TestTelemetryHandleInitialize(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			// The handler always returns whatever next returns (possibly nil).
+			require.Equal(t, tc.nextResult, result)
+
+			output := buf.String()
+			require.Contains(t, output, tc.wantLogged)
+			for _, field := range tc.wantLogFields {
+				require.Contains(t, output, field, "expected structured log field value %q in output", field)
+			}
+		})
+	}
+}
+
+func TestTelemetryHandleDiscover(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name          string
+		req           mcp.Request
+		nextResult    mcp.Result
+		nextErr       error
+		wantLogged    string
+		wantLogFields []string
+		wantErr       bool
+	}{
+		{
+			name: "successful discovery logs client info from request _meta",
+			req: mockRequest(&mcp.DiscoverParams{
+				Meta: mcp.Meta{
+					mcp.MetaKeyProtocolVersion: protocolVersionModern,
+					mcp.MetaKeyClientInfo:      &mcp.Implementation{Name: "test-client", Version: "1.0"},
+				},
+			}),
+			nextResult: &mcp.DiscoverResult{
+				SupportedVersions: []string{protocolVersionModern, protocolVersionLegacy},
+			},
+			nextErr:       nil,
+			wantLogged:    "MCP server discovered",
+			wantLogFields: []string{"test-client", `"protocol_version":"` + protocolVersionModern + `"`, protocolVersionLegacy},
+			wantErr:       false,
+		},
+		{
+			name: "client info decoded from wire-shaped _meta",
+			req: mockRequest(&mcp.DiscoverParams{
+				Meta: mcp.Meta{
+					mcp.MetaKeyProtocolVersion: protocolVersionModern,
+					mcp.MetaKeyClientInfo:      map[string]any{"name": "wire-client", "version": "2.0"},
+				},
+			}),
+			nextResult:    &mcp.DiscoverResult{SupportedVersions: []string{protocolVersionModern}},
+			nextErr:       nil,
+			wantLogged:    "MCP server discovered",
+			wantLogFields: []string{"wire-client"},
+			wantErr:       false,
+		},
+		{
+			name:       "successful discovery without params does not panic",
+			req:        mockRequest[*mcp.DiscoverParams](nil),
+			nextResult: &mcp.DiscoverResult{SupportedVersions: []string{protocolVersionModern}},
+			nextErr:    nil,
+			wantLogged: "MCP server discovered",
+			wantErr:    false,
+		},
+		{
+			name:       "failed discovery logs error",
+			req:        mockRequest(&mcp.DiscoverParams{}),
+			nextResult: nil,
+			nextErr:    errors.New("discover boom"),
+			wantLogged: "MCP discovery failed",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid request type falls through gracefully",
+			req:        mockRequest(&mcp.PingParams{}),
+			nextResult: &mcp.DiscoverResult{},
+			nextErr:    nil,
+			wantLogged: "Failed to extract discover request for telemetry",
+			wantErr:    false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			logger, buf := newTestLogger()
+
+			nextCalled := false
+			next := func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+				nextCalled = true
+				return tc.nextResult, tc.nextErr
+			}
+
+			result, err := telemetryHandleServerDiscover(context.Background(), methodServerDiscover, tc.req, next, logger)
+
+			require.True(t, nextCalled, "expected next handler to be called")
+
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
 			require.Equal(t, tc.nextResult, result)
 
 			output := buf.String()
