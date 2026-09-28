@@ -144,6 +144,16 @@ func init() {
 	)
 }
 
+// Transport identifies how the MCP server is being served.
+type Transport string
+
+const (
+	// TransportStdio serves a single client over stdin/stdout.
+	TransportStdio Transport = "stdio"
+	// TransportHTTP serves stateless, streamable HTTP.
+	TransportHTTP Transport = "http"
+)
+
 // ServerConfig holds configuration for creating a new MCP server.
 type ServerConfig struct {
 	Logger                *slog.Logger
@@ -158,6 +168,7 @@ type ServerConfig struct {
 	ToonOutputEnabled     bool
 	ClientLoggingEnabled  bool
 	KeepAlive             time.Duration
+	Transport             Transport
 }
 
 // NewServer creates a new MCP server using the official Go SDK.
@@ -198,6 +209,12 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*mcp.Server, *ServerConta
 	caps := &mcp.ServerCapabilities{Logging: &mcp.LoggingCapabilities{}} //nolint:staticcheck // SA1019: SEP-2577 deprecation window
 	caps.AddExtension(skillsExtensionCapability, nil)
 
+	// Keep alive doesn't work over stateless http.
+	keepAlive := time.Duration(0)
+	if cfg.Transport != TransportHTTP {
+		keepAlive = cfg.KeepAlive
+	}
+
 	server := mcp.NewServer(
 		&mcp.Implementation{
 			Name:    "prometheus-mcp",
@@ -207,7 +224,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*mcp.Server, *ServerConta
 		&mcp.ServerOptions{
 			Instructions: instrx,
 			Logger:       logger.WithGroup("go_sdk_logger"),
-			KeepAlive:    cfg.KeepAlive,
+			KeepAlive:    keepAlive,
 			Capabilities: caps,
 		},
 	)
@@ -234,22 +251,19 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*mcp.Server, *ServerConta
 	return server, container, nil
 }
 
-// NewStreamableHTTPHandler creates an HTTP handler for the MCP server.
-func NewStreamableHTTPHandler(server *mcp.Server, logger *slog.Logger, sessionTimeout time.Duration) http.Handler {
-	if sessionTimeout == 0 {
-		// 0 value for session timeout means that sessions never close.
-		// Set a default if unset.
-		sessionTimeout = 1 * time.Hour
+// NewStreamableHTTPHandler creates the HTTP handler for the MCP server.
+func NewStreamableHTTPHandler(server *mcp.Server, logger *slog.Logger) http.Handler {
+	opts := &mcp.StreamableHTTPOptions{
+		Logger:                       logger,
+		Stateless:                    true,
+		PropagateRequestCancellation: true,
 	}
 
 	return mcp.NewStreamableHTTPHandler(
 		func(r *http.Request) *mcp.Server {
 			return server
 		},
-		&mcp.StreamableHTTPOptions{
-			SessionTimeout: sessionTimeout,
-			Logger:         logger,
-		},
+		opts,
 	)
 }
 

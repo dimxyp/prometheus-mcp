@@ -499,7 +499,7 @@ func TestTelemetryHandleResourceRead(t *testing.T) {
 
 // TestFullAuthFlow tests the auth flow from a context-stored Authorization
 // value through GetAPIClient to the outgoing Prometheus request. The context
-// value is seeded directly; TestPerRequestAuthForwarding_StatefulHTTP covers
+// value is seeded directly; TestPerRequestAuthForwarding_HTTP covers
 // how it reaches the context from an HTTP request.
 func TestFullAuthFlow(t *testing.T) {
 	t.Parallel()
@@ -874,16 +874,11 @@ func (rt *rotatingAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response
 	return rt.base.RoundTrip(req)
 }
 
-// TestPerRequestAuthForwarding_StatefulHTTP tests the complete auth flow for
-// a client that rotates credentials mid-session. Handler contexts on the
-// streamable HTTP transport derive from the HTTP request that established
-// the MCP session, so without authForwardingMiddleware every tool call
-// authenticates with the Authorization header sent at initialize time. The
-// test drives a real client/server MCP session over HTTP and verifies that
-// the backend sees the header carried by each tools/call request. A final
-// header-less call verifies that requests without credentials use the
-// default client instead of the session's initialize-time token.
-func TestPerRequestAuthForwarding_StatefulHTTP(t *testing.T) {
+// TestPerRequestAuthForwarding_HTTP drives a client that rotates credentials
+// per call over streamable HTTP. The backend must see the header each
+// tools/call carried, and a final header-less call must fall back to the
+// default client.
+func TestPerRequestAuthForwarding_HTTP(t *testing.T) {
 	t.Parallel()
 
 	var mu sync.Mutex
@@ -905,10 +900,11 @@ func TestPerRequestAuthForwarding_StatefulHTTP(t *testing.T) {
 		PrometheusURL:     promServer.URL,
 		PrometheusTimeout: 30 * time.Second,
 		RoundTripper:      http.DefaultTransport,
+		Transport:         TransportHTTP,
 	})
 	require.NoError(t, err)
 
-	httpServer := httptest.NewServer(NewStreamableHTTPHandler(server, logger, time.Minute))
+	httpServer := httptest.NewServer(NewStreamableHTTPHandler(server, logger))
 	defer httpServer.Close()
 
 	rt := &rotatingAuthRoundTripper{base: http.DefaultTransport}
