@@ -394,9 +394,13 @@ func initHTTPServer(logger *slog.Logger, mcpContainer *mcp.ServerContainer) *htt
 		// Important: the WriteTimeout must stay disabled. MCP responses
 		// are SSE streams: tool calls stream notifications before their
 		// result, and `subscriptions/listen` streams hang open by design.
+		//
+		// The IdleTimeout is generous so that keep-alive connections
+		// from MCP clients, load balancer health checks, and scrapes
+		// on typical intervals are reused rather than churned.
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 0,
-		IdleTimeout:  30 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	metricsHandler := promhttp.HandlerFor(
