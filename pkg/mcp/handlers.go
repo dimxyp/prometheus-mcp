@@ -386,14 +386,14 @@ func (s *ServerContainer) CleanTombstonesHandler(ctx context.Context, req *mcp.C
 
 	logger := s.GetToolLogger(req, nil)
 
-	logger.Warn("executing TSDB admin operation: clean tombstones")
+	logger.WarnContext(ctx, "executing TSDB admin operation: clean tombstones")
 
 	result, err := s.cleanTombstonesAPICall(ctx)
 	if err != nil {
 		return newToolErrorResult("failed making clean tombstones api call: " + err.Error()), nil, nil
 	}
 
-	logger.Warn("clean tombstones completed successfully")
+	logger.WarnContext(ctx, "clean tombstones completed successfully")
 	return newToolTextResult(result), nil, nil
 }
 
@@ -422,14 +422,14 @@ func (s *ServerContainer) DeleteSeriesHandler(ctx context.Context, req *mcp.Call
 		return newToolErrorResult(err.Error()), nil, nil
 	}
 
-	logger.Warn("executing TSDB admin operation: delete series")
+	logger.WarnContext(ctx, "executing TSDB admin operation: delete series")
 
 	result, err := s.deleteSeriesAPICall(ctx, input.Matches, startTs, endTs)
 	if err != nil {
 		return newToolErrorResult("failed making delete series api call: " + err.Error()), nil, nil
 	}
 
-	logger.Warn("delete series completed successfully")
+	logger.WarnContext(ctx, "delete series completed successfully")
 	return newToolTextResult(result), nil, nil
 }
 
@@ -441,14 +441,14 @@ func (s *ServerContainer) SnapshotHandler(ctx context.Context, req *mcp.CallTool
 
 	logger := s.GetToolLogger(req, input)
 
-	logger.Warn("executing TSDB admin operation: snapshot")
+	logger.WarnContext(ctx, "executing TSDB admin operation: snapshot")
 
 	result, err := s.snapshotAPICall(ctx, input.SkipHead)
 	if err != nil {
 		return newToolErrorResult("failed making snapshot api call: " + err.Error()), nil, nil
 	}
 
-	logger.Warn("snapshot completed successfully")
+	logger.WarnContext(ctx, "snapshot completed successfully")
 	return newToolTextResult(result), nil, nil
 }
 
@@ -476,14 +476,14 @@ func (s *ServerContainer) ReadyHandler(ctx context.Context, req *mcp.CallToolReq
 func (s *ServerContainer) ReloadHandler(ctx context.Context, req *mcp.CallToolRequest, input EmptyInput) (*mcp.CallToolResult, any, error) {
 	logger := s.GetToolLogger(req, nil)
 
-	logger.Warn("triggering Prometheus configuration reload")
+	logger.WarnContext(ctx, "triggering Prometheus configuration reload")
 
 	result, err := s.doManagementAPICall(ctx, http.MethodPost, mgmtAPIReloadEndpoint)
 	if err != nil {
 		return newToolErrorResult("failed making reload api call: " + err.Error()), nil, nil
 	}
 
-	logger.Warn("reload completed successfully")
+	logger.WarnContext(ctx, "reload completed successfully")
 	return newToolTextResult(result), nil, nil
 }
 
@@ -491,14 +491,14 @@ func (s *ServerContainer) ReloadHandler(ctx context.Context, req *mcp.CallToolRe
 func (s *ServerContainer) QuitHandler(ctx context.Context, req *mcp.CallToolRequest, input EmptyInput) (*mcp.CallToolResult, any, error) {
 	logger := s.GetToolLogger(req, nil)
 
-	logger.Warn("triggering Prometheus shutdown")
+	logger.WarnContext(ctx, "triggering Prometheus shutdown")
 
 	result, err := s.doManagementAPICall(ctx, http.MethodPost, mgmtAPIQuitEndpoint)
 	if err != nil {
 		return newToolErrorResult("failed making quit api call: " + err.Error()), nil, nil
 	}
 
-	logger.Warn("quit signal sent successfully - Prometheus is shutting down")
+	logger.WarnContext(ctx, "quit signal sent successfully - Prometheus is shutting down")
 	return newToolTextResult(result), nil, nil
 }
 
@@ -566,7 +566,7 @@ func (s *ServerContainer) DocsSearchHandler(ctx context.Context, req *mcp.CallTo
 		parts := strings.Split(chunkID, "#")
 		if len(parts) != 2 {
 			// Valid chunk format is `filename#chunkID`.
-			logger.Warn("skipping malformed chunk ID", "chunk_id", chunkID)
+			logger.WarnContext(ctx, "skipping malformed chunk ID", "chunk_id", chunkID)
 			continue
 		}
 		name := parts[0]
@@ -576,7 +576,7 @@ func (s *ServerContainer) DocsSearchHandler(ctx context.Context, req *mcp.CallTo
 		}
 	}
 
-	logger.Debug("docs search completed", "matching_files", len(matchingDocsFiles))
+	logger.DebugContext(ctx, "docs search completed", "matching_files", len(matchingDocsFiles))
 
 	// Read all matching files via the resource handler and combine results.
 	resourceResults := make([]*mcp.ReadResourceResult, 0, len(matchingDocsFiles))

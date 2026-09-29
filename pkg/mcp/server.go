@@ -612,6 +612,12 @@ func (s *ServerContainer) GetDocFileContent(path string) (string, error) {
 // messages that should notify the user and log as appropriate. Currently, it
 // is primarily used by the TSDB Admin tools to do extra logging around admin
 // tool calls.
+//
+// Callers must log through the Context variants (WarnContext, ...) and pass
+// the handler's context. The SDK correlates a client notification to the
+// request it came from through the context. Without it, stateless HTTP has
+// no stream to deliver on, and a 2026-07-28 client's log level is missing,
+// so the SDK drops the message on every transport. Both fail silently.
 func (s *ServerContainer) GetToolLogger(req *mcp.CallToolRequest, input any) *slog.Logger {
 	logger := s.logger
 	if s.clientLoggingEnabled {
