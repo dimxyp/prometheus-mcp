@@ -169,6 +169,7 @@ type ServerConfig struct {
 	ClientLoggingEnabled  bool
 	KeepAlive             time.Duration
 	Transport             Transport
+	SDKLogger             *slog.Logger
 }
 
 // NewServer creates a new MCP server using the official Go SDK.
@@ -176,6 +177,10 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*mcp.Server, *ServerConta
 	logger := cfg.Logger
 	if logger == nil {
 		logger = promslog.NewNopLogger()
+	}
+	sdkLogger := cfg.SDKLogger
+	if sdkLogger == nil {
+		sdkLogger = logger
 	}
 
 	container, err := newServerContainer(cfg)
@@ -227,7 +232,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*mcp.Server, *ServerConta
 		},
 		&mcp.ServerOptions{
 			Instructions: instrx,
-			Logger:       logger.WithGroup("go_sdk_logger"),
+			Logger:       sdkLogger.WithGroup("go_sdk_logger"),
 			KeepAlive:    keepAlive,
 			Capabilities: caps,
 		},

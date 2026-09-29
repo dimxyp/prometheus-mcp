@@ -360,6 +360,8 @@ A pre-built [Grafana](https://grafana.com/) dashboard is included in the [`grafa
 This project makes heavy use of structured, leveled logging.
 Please see [Flags](#command-line-flags) for more information on how to set the log format, level, and optional file.
 
+The MCP go-sdk logs through a logger of its own: its warnings and errors show at the default level, and its per-request session bookkeeping only with `--log.level=debug`.
+
 ## Development
 ### Development Environment with Devbox + Direnv
 If you use [Devbox](https://www.jetify.com/devbox) and

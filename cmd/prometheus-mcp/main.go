@@ -196,6 +196,16 @@ func main() {
 	slog.SetDefault(logger)
 	logger.Info("Starting "+programName, "version", promversion.Version, "build_date", promversion.BuildDate, "commit", promversion.Revision, "docs_commit", docsCommit, "go_version", runtime.Version())
 
+	// Provide the go-sdk it's own logger with a `warn` floor to prevent log spam:
+	// https://github.com/modelcontextprotocol/go-sdk/issues/1204
+	sdkLogger := logger
+	if promslogConfig.Level.Level() == slog.LevelInfo {
+		cfg := *promslogConfig
+		cfg.Level = promslog.NewLevel()
+		_ = cfg.Level.Set("warn")
+		sdkLogger = promslog.New(&cfg)
+	}
+
 	// Optionally load HTTP config file to configure HTTP client for Prometheus API.
 	rt, err := getRoundTripperFromConfig(*flagHTTPConfig)
 	if err != nil {
@@ -224,6 +234,7 @@ func main() {
 
 	mcpServer, mcpContainer, err := mcp.NewServer(ctx, mcp.ServerConfig{
 		Logger:                logger,
+		SDKLogger:             sdkLogger,
 		PrometheusURL:         *flagPrometheusURL,
 		PrometheusBackend:     *flagPrometheusBackend,
 		PrometheusTimeout:     *flagPrometheusTimeout,
@@ -316,7 +327,7 @@ func main() {
 						logger.Warn("--mcp.keepalive-interval has no effect on the HTTP transport; keepalive pings are only sent on stdio")
 					}
 
-					httpMcpHandler := mcp.NewStreamableHTTPHandler(mcpServer, logger)
+					httpMcpHandler := mcp.NewStreamableHTTPHandler(mcpServer, sdkLogger)
 					http.Handle("/mcp", httpMcpHandler)
 					mcpContainer.SetReady(true)
 					<-cancel

@@ -14,9 +14,11 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -78,4 +80,56 @@ func TestStreamableHTTPHandler_NegotiatesModernProtocol(t *testing.T) {
 	tools, err := session.ListTools(ctx, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, tools.Tools)
+}
+
+// syncBuffer is a bytes.Buffer safe for concurrent use; the go-sdk logs from
+// its own session goroutines.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// TestSDKLoggerReceivesTheSDKRecords pins the split between the two loggers.
+// "server session connected" is written synchronously by every Connect.
+func TestSDKLoggerReceivesTheSDKRecords(t *testing.T) {
+	t.Parallel()
+
+	var appBuf, sdkBuf syncBuffer
+	server, _, err := NewServer(context.Background(), ServerConfig{
+		Logger:        promslog.New(&promslog.Config{Writer: &appBuf}),
+		SDKLogger:     promslog.New(&promslog.Config{Writer: &sdkBuf}),
+		PrometheusURL: "http://127.0.0.1:9090",
+		RoundTripper:  http.DefaultTransport,
+		Transport:     TransportStdio,
+	})
+	require.NoError(t, err)
+
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	_, err = server.Connect(context.Background(), serverTransport, nil)
+	require.NoError(t, err)
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.0"}, nil)
+	session, err := client.Connect(context.Background(), clientTransport, nil)
+	require.NoError(t, err)
+	defer session.Close()
+
+	const sdkRecord = "server session connected"
+	require.Contains(t, sdkBuf.String(), sdkRecord, "the SDK's records must reach SDKLogger")
+	require.NotContains(t, appBuf.String(), sdkRecord, "the SDK's records must not reach Logger")
+
+	const appRecord = "MCP server created"
+	require.Contains(t, appBuf.String(), appRecord, "the server's records must reach Logger")
+	require.NotContains(t, sdkBuf.String(), appRecord, "the server's records must not reach SDKLogger")
 }
