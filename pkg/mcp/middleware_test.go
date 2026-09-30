@@ -533,6 +533,7 @@ func TestTelemetryHandleToolCall(t *testing.T) {
 			cancelCtx:     true,
 			toolName:      "canceled_is_error",
 			wantLogged:    "Tool call canceled by client",
+			wantLogFields: []string{`"error":"context canceled"`},
 			wantNotLogged: []string{"Failed calling tool"},
 			wantErr:       false,
 		},

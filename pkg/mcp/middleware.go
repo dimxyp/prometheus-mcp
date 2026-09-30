@@ -172,7 +172,7 @@ func telemetryHandleToolCall(ctx context.Context, method string, req mcp.Request
 	// explicit notifications/cancelled while the call was in flight. This
 	// is not a failure, so it is neither counted as one nor logged as an error.
 	if errors.Is(ctx.Err(), context.Canceled) {
-		logger.Debug("Tool call canceled by client", "error", err)
+		logger.Debug("Tool call canceled by client", "error", context.Cause(ctx))
 		return result, err
 	}
 
