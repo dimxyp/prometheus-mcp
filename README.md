@@ -214,7 +214,8 @@ Please check the documentation for the tool being used/integrated for specific i
 ### Transports
 
 The server speaks MCP over `stdio` (the default) or HTTP (`--mcp.transport=http`, served at `/mcp` on the web listen address).
-Every MCP protocol revision is supported; the client picks one during its handshake.
+MCP protocol revisions `2024-11-05` through `2026-07-28` are supported, and the client chooses which one to use.
+Over HTTP, only the Streamable HTTP transport is served; the older HTTP+SSE transport is not.
 
 The HTTP transport is stateless: each request is handled on its own and no session is tracked, so replicas can sit behind any load balancer without session affinity.
 What follows from that:
