@@ -133,7 +133,7 @@ func telemetryHandleServerDiscover(ctx context.Context, method string, req mcp.R
 	}
 
 	var supportedVersions []string
-	if discoverResult, ok := result.(*mcp.DiscoverResult); ok {
+	if discoverResult, ok := result.(*mcp.DiscoverResult); ok && discoverResult != nil {
 		supportedVersions = discoverResult.SupportedVersions
 	}
 

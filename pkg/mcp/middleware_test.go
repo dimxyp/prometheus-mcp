@@ -360,6 +360,14 @@ func TestTelemetryHandleDiscover(t *testing.T) {
 			wantErr:    false,
 		},
 		{
+			name:       "nil discover result does not panic",
+			req:        mockRequest(&mcp.DiscoverParams{}),
+			nextResult: (*mcp.DiscoverResult)(nil),
+			nextErr:    nil,
+			wantLogged: "MCP server discovered",
+			wantErr:    false,
+		},
+		{
 			name:       "failed discovery logs error",
 			req:        mockRequest(&mcp.DiscoverParams{}),
 			nextResult: nil,
