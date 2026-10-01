@@ -15,6 +15,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -23,13 +24,14 @@ import (
 )
 
 // MCP method names. Needed because the go-sdk does not export them.
-// https://github.com/modelcontextprotocol/go-sdk/blob/13488f7da1ed8eda47413df3420ab64026696798/mcp/protocol.go#L1330-L1357
+// https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/protocol.go#L2321-L2351
 const (
-	methodInitialize    = "initialize"
-	methodToolsCall     = "tools/call"
-	methodResourcesRead = "resources/read"
-	methodPromptsGet    = "prompts/get"
-	methodPromptsList   = "prompts/list"
+	methodInitialize     = "initialize"
+	methodServerDiscover = "server/discover"
+	methodToolsCall      = "tools/call"
+	methodResourcesRead  = "resources/read"
+	methodPromptsGet     = "prompts/get"
+	methodPromptsList    = "prompts/list"
 )
 
 // telemetryMiddleware creates an MCP middleware that instruments MCP method
@@ -40,6 +42,8 @@ func telemetryMiddleware(logger *slog.Logger) mcp.Middleware {
 			switch method {
 			case methodInitialize:
 				return telemetryHandleInitialize(ctx, method, req, next, logger)
+			case methodServerDiscover:
+				return telemetryHandleServerDiscover(ctx, method, req, next, logger)
 			case methodToolsCall:
 				return telemetryHandleToolCall(ctx, method, req, next, logger)
 			case methodResourcesRead:
@@ -100,6 +104,49 @@ func telemetryHandleInitialize(ctx context.Context, method string, req mcp.Reque
 	return result, nil
 }
 
+// telemetryHandleServerDiscover handles the MCP 2026-07-28 server/discover
+// handshake, logging client info after successful discovery. Clients on the
+// new protocol never send initialize; they carry client info in every
+// request's _meta instead, and discovery is just the one place it gets
+// logged. Discovery is optional for clients, so it is not a readiness
+// signal.
+func telemetryHandleServerDiscover(ctx context.Context, method string, req mcp.Request, next mcp.MethodHandler, logger *slog.Logger) (mcp.Result, error) {
+	discoverReq, ok := req.(*mcp.ServerRequest[*mcp.DiscoverParams])
+	if !ok {
+		// Can't extract discover request, pass through without instrumentation.
+		logger.Warn("Failed to extract discover request for telemetry", "method", method)
+		return next(ctx, method, req)
+	}
+
+	result, err := next(ctx, method, req)
+	if err != nil {
+		logger.Error("MCP discovery failed", "error", err)
+		return result, err
+	}
+
+	// Client info travels in the per-request _meta.
+	clientName := ""
+	clientVersion := ""
+	if clientInfo := discoverReq.ClientInfo(); clientInfo != nil {
+		clientName = clientInfo.Name
+		clientVersion = clientInfo.Version
+	}
+
+	var supportedVersions []string
+	if discoverResult, ok := result.(*mcp.DiscoverResult); ok && discoverResult != nil {
+		supportedVersions = discoverResult.SupportedVersions
+	}
+
+	logger.Debug("MCP server discovered",
+		"client_name", clientName,
+		"client_version", clientVersion,
+		"protocol_version", discoverReq.ProtocolVersion(),
+		"supported_versions", supportedVersions,
+	)
+
+	return result, nil
+}
+
 // telemetryHandleToolCall instruments a tools/call request with metrics and logging.
 func telemetryHandleToolCall(ctx context.Context, method string, req mcp.Request, next mcp.MethodHandler, logger *slog.Logger) (mcp.Result, error) {
 	params, ok := req.GetParams().(*mcp.CallToolParamsRaw)
@@ -120,6 +167,14 @@ func telemetryHandleToolCall(ctx context.Context, method string, req mcp.Request
 
 	metricToolCallDuration.WithLabelValues(toolName).Observe(duration.Seconds())
 	logger.Debug("Finished calling tool", "duration", duration)
+
+	// A canceled request context means the client disconnected or sent an
+	// explicit notifications/cancelled while the call was in flight. This
+	// is not a failure, so it is neither counted as one nor logged as an error.
+	if errors.Is(ctx.Err(), context.Canceled) {
+		logger.Debug("Tool call canceled by client", "error", context.Cause(ctx))
+		return result, err
+	}
 
 	// Protocol level failure; this is an unknown tool, a handler returning
 	// *jsonrpc.Error, or an output marshalling failure. This results in a

@@ -72,7 +72,7 @@ var (
 	metricToolCallsFailed = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: prometheus.BuildFQName(metrics.MetricNamespace, "tool", "calls_failed_total"),
-			Help: "Total number of failures per tool.",
+			Help: "Total number of failures per tool. Calls canceled by the client are not counted.",
 		},
 		[]string{"tool_name"},
 	)
@@ -144,6 +144,16 @@ func init() {
 	)
 }
 
+// Transport identifies how the MCP server is being served.
+type Transport string
+
+const (
+	// TransportStdio serves a single client over stdin/stdout.
+	TransportStdio Transport = "stdio"
+	// TransportHTTP serves stateless, streamable HTTP.
+	TransportHTTP Transport = "http"
+)
+
 // ServerConfig holds configuration for creating a new MCP server.
 type ServerConfig struct {
 	Logger                *slog.Logger
@@ -158,6 +168,8 @@ type ServerConfig struct {
 	ToonOutputEnabled     bool
 	ClientLoggingEnabled  bool
 	KeepAlive             time.Duration
+	Transport             Transport
+	SDKLogger             *slog.Logger
 }
 
 // NewServer creates a new MCP server using the official Go SDK.
@@ -165,6 +177,10 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*mcp.Server, *ServerConta
 	logger := cfg.Logger
 	if logger == nil {
 		logger = promslog.NewNopLogger()
+	}
+	sdkLogger := cfg.SDKLogger
+	if sdkLogger == nil {
+		sdkLogger = logger
 	}
 
 	container, err := newServerContainer(cfg)
@@ -188,13 +204,25 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*mcp.Server, *ServerConta
 		instrx = "Prometheus MCP Server"
 	}
 
-	// Declare the SEP-2640 skills extension so skill-aware hosts can
-	// discover the skill:// resources. Logging is pinned explicitly
-	// because a non-nil Capabilities overrides the SDK's historical
-	// {"logging":{}} default; the remaining capabilities are still
-	// inferred from the registered features.
-	caps := &mcp.ServerCapabilities{Logging: &mcp.LoggingCapabilities{}}
+	// The catalog never changes after startup, so pin the capabilities
+	// empty: nil ones are inferred as listChanged:true, and 2026-07-28
+	// clients would hold a subscriptions/listen stream open for nothing.
+	// Logging is pinned since a non-nil Capabilities drops the SDK default;
+	// it is deprecated (SEP-2577) but still served. SEP-2640 exposes the
+	// skill:// resources to skill-aware hosts.
+	caps := &mcp.ServerCapabilities{
+		Tools:     &mcp.ToolCapabilities{},
+		Prompts:   &mcp.PromptCapabilities{},
+		Resources: &mcp.ResourceCapabilities{},
+		Logging:   &mcp.LoggingCapabilities{}, //nolint:staticcheck // SA1019: SEP-2577 deprecation window
+	}
 	caps.AddExtension(skillsExtensionCapability, nil)
+
+	// Keep alive doesn't work over stateless http.
+	keepAlive := time.Duration(0)
+	if cfg.Transport != TransportHTTP {
+		keepAlive = cfg.KeepAlive
+	}
 
 	server := mcp.NewServer(
 		&mcp.Implementation{
@@ -204,8 +232,8 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*mcp.Server, *ServerConta
 		},
 		&mcp.ServerOptions{
 			Instructions: instrx,
-			Logger:       logger.WithGroup("go_sdk_logger"),
-			KeepAlive:    cfg.KeepAlive,
+			Logger:       sdkLogger.WithGroup("go_sdk_logger"),
+			KeepAlive:    keepAlive,
 			Capabilities: caps,
 		},
 	)
@@ -232,22 +260,19 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*mcp.Server, *ServerConta
 	return server, container, nil
 }
 
-// NewStreamableHTTPHandler creates an HTTP handler for the MCP server.
-func NewStreamableHTTPHandler(server *mcp.Server, logger *slog.Logger, sessionTimeout time.Duration) http.Handler {
-	if sessionTimeout == 0 {
-		// 0 value for session timeout means that sessions never close.
-		// Set a default if unset.
-		sessionTimeout = 1 * time.Hour
+// NewStreamableHTTPHandler creates the HTTP handler for the MCP server.
+func NewStreamableHTTPHandler(server *mcp.Server, logger *slog.Logger) http.Handler {
+	opts := &mcp.StreamableHTTPOptions{
+		Logger:                       logger,
+		Stateless:                    true,
+		PropagateRequestCancellation: true,
 	}
 
 	return mcp.NewStreamableHTTPHandler(
 		func(r *http.Request) *mcp.Server {
 			return server
 		},
-		&mcp.StreamableHTTPOptions{
-			SessionTimeout: sessionTimeout,
-			Logger:         logger,
-		},
+		opts,
 	)
 }
 
@@ -596,6 +621,12 @@ func (s *ServerContainer) GetDocFileContent(path string) (string, error) {
 // messages that should notify the user and log as appropriate. Currently, it
 // is primarily used by the TSDB Admin tools to do extra logging around admin
 // tool calls.
+//
+// Callers must log through the Context variants (WarnContext, ...) and pass
+// the handler's context. The SDK correlates a client notification to the
+// request it came from through the context. Without it, stateless HTTP has
+// no stream to deliver on, and a 2026-07-28 client's log level is missing,
+// so the SDK drops the message on every transport. Both fail silently.
 func (s *ServerContainer) GetToolLogger(req *mcp.CallToolRequest, input any) *slog.Logger {
 	logger := s.logger
 	if s.clientLoggingEnabled {

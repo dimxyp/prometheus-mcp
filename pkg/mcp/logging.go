@@ -15,20 +15,14 @@ package mcp
 
 import (
 	"log/slog"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/prometheus/common/promslog"
 )
 
-// clientLoggingInterval is the minimum interval between log messages sent to
-// the MCP client. This rate limits client notifications to prevent flooding.
-const clientLoggingInterval = 100 * time.Millisecond
-
 // getClientLogger creates an slog.Logger that sends logs to the MCP client via
 // protocol notifications. Returns nil if the session cannot be obtained, for
-// some reason.  The logger uses rate limiting to prevent flooding clients with
-// messages.  The loggerName appears in the "logger" field of log
+// some reason.  The loggerName appears in the "logger" field of log
 // notifications.
 func getClientLogger(req *mcp.CallToolRequest, loggerName string) *slog.Logger {
 	if req == nil {
@@ -40,9 +34,14 @@ func getClientLogger(req *mcp.CallToolRequest, loggerName string) *slog.Logger {
 		return nil
 	}
 
-	return slog.New(mcp.NewLoggingHandler(serverSession, &mcp.LoggingHandlerOptions{
-		LoggerName:  loggerName,
-		MinInterval: clientLoggingInterval,
+	// MCP logging is deprecated as of protocol 2026-07-28 (SEP-2577).
+	//
+	// MinInterval is deliberately left unset. The SDK builds the limiter with
+	// a burst of 1, and this function runs once per tool call, so the limiter
+	// is per call and throttles nothing across calls. All it does is drop the
+	// second message of a handler's start/finish pair.
+	return slog.New(mcp.NewLoggingHandler(serverSession, &mcp.LoggingHandlerOptions{ //nolint:staticcheck // SA1019: SEP-2577 deprecation window
+		LoggerName: loggerName,
 	}))
 }
 

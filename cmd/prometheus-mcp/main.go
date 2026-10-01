@@ -130,17 +130,23 @@ var (
 			" Docs: https://prometheus.io/docs/prometheus/latest/querying/api/#tsdb-admin-apis",
 	).Default("false").Bool()
 
-	flagMcpKeepaliveInterval = kingpin.Flag(
+	flagMcpKeepaliveIntervalSet    bool
+	flagMcpKeepaliveIntervalClause = kingpin.Flag(
 		"mcp.keepalive-interval",
-		"Interval for sending keepalive pings to connected MCP sessions."+
-			" If the peer fails to respond, the session is closed."+
-			" Most useful for HTTP transports to prevent idle connections from dropping.",
-	).Default("30s").Duration()
+		"Interval between keepalive pings on the stdio transport; the session is closed when the peer stops answering."+
+			" Not used by the HTTP transport.",
+	).Default("30s").IsSetByUser(&flagMcpKeepaliveIntervalSet)
+	flagMcpKeepaliveInterval = flagMcpKeepaliveIntervalClause.Duration()
 
-	flagMcpSessionTimeout = kingpin.Flag(
+	// Deprecated. Session-tracked HTTP was removed and the value is never
+	// used. The flag stays registered so deployments that pass it keep
+	// starting, and goes away in a later release.
+	flagMcpSessionTimeoutSet    bool
+	flagMcpSessionTimeoutClause = kingpin.Flag(
 		"mcp.session-timeout",
-		"Idle session timeout for HTTP transport MCP sessions.",
-	).Default("10m").Duration()
+		"Deprecated and ignored: HTTP is served statelessly. Will be removed in a future release.",
+	).Default("10m").IsSetByUser(&flagMcpSessionTimeoutSet)
+	flagMcpSessionTimeout = flagMcpSessionTimeoutClause.Duration()
 
 	flagDocsAutoUpdate = kingpin.Flag(
 		"docs.auto-update",
@@ -190,6 +196,16 @@ func main() {
 	slog.SetDefault(logger)
 	logger.Info("Starting "+programName, "version", promversion.Version, "build_date", promversion.BuildDate, "commit", promversion.Revision, "docs_commit", docsCommit, "go_version", runtime.Version())
 
+	// Provide the go-sdk it's own logger with a `warn` floor to prevent log spam:
+	// https://github.com/modelcontextprotocol/go-sdk/issues/1204
+	sdkLogger := logger
+	if promslogConfig.Level.Level() == slog.LevelInfo {
+		cfg := *promslogConfig
+		cfg.Level = promslog.NewLevel()
+		_ = cfg.Level.Set("warn")
+		sdkLogger = promslog.New(&cfg)
+	}
+
 	// Optionally load HTTP config file to configure HTTP client for Prometheus API.
 	rt, err := getRoundTripperFromConfig(*flagHTTPConfig)
 	if err != nil {
@@ -207,8 +223,18 @@ func main() {
 		docsFs = docs
 	}
 
+	transport := mcp.TransportStdio
+	if *flagMcpTransport == "http" {
+		transport = mcp.TransportHTTP
+	}
+
+	if flagMcpSessionTimeoutSet || flagMcpSessionTimeoutClause.HasEnvarValue() {
+		logger.Warn("--mcp.session-timeout is deprecated and ignored: session-tracked HTTP was removed and every request is served statelessly", "value", *flagMcpSessionTimeout)
+	}
+
 	mcpServer, mcpContainer, err := mcp.NewServer(ctx, mcp.ServerConfig{
 		Logger:                logger,
+		SDKLogger:             sdkLogger,
 		PrometheusURL:         *flagPrometheusURL,
 		PrometheusBackend:     *flagPrometheusBackend,
 		PrometheusTimeout:     *flagPrometheusTimeout,
@@ -220,6 +246,7 @@ func main() {
 		ToonOutputEnabled:     *flagMcpToonOutputEnabled,
 		ClientLoggingEnabled:  *flagMcpClientLogging,
 		KeepAlive:             *flagMcpKeepaliveInterval,
+		Transport:             transport,
 	})
 	if err != nil {
 		logger.Error("Failed to create MCP server", "err", err)
@@ -287,7 +314,7 @@ func main() {
 			func() error {
 				switch *flagMcpTransport {
 				case "stdio":
-					logger.Debug("starting MCP server", "transport", "stdio")
+					logger.Debug("starting MCP server", "transport", transport)
 
 					mcpContainer.SetReady(true)
 					if err := mcpServer.Run(ctx, &sdkmcp.StdioTransport{}); err != nil {
@@ -295,9 +322,12 @@ func main() {
 					}
 
 				case "http":
-					logger.Debug("starting MCP server", "transport", "http")
+					logger.Debug("starting MCP server", "transport", transport)
+					if flagMcpKeepaliveIntervalSet || flagMcpKeepaliveIntervalClause.HasEnvarValue() {
+						logger.Warn("--mcp.keepalive-interval has no effect on the HTTP transport; keepalive pings are only sent on stdio")
+					}
 
-					httpMcpHandler := mcp.NewStreamableHTTPHandler(mcpServer, logger, *flagMcpSessionTimeout)
+					httpMcpHandler := mcp.NewStreamableHTTPHandler(mcpServer, sdkLogger)
 					http.Handle("/mcp", httpMcpHandler)
 					mcpContainer.SetReady(true)
 					<-cancel
@@ -358,16 +388,19 @@ func main() {
 func initHTTPServer(logger *slog.Logger, mcpContainer *mcp.ServerContainer) *http.Server {
 	server := &http.Server{
 		// These are TCP-level timeouts for individual HTTP
-		// request/response cycles, not MCP session timeouts.  MCP
-		// sessions are long lived, tracked by session ID, and managed
-		// through the go-sdk separately from these HTTP server values.
+		// request/response cycles; the go-sdk manages MCP sessions
+		// separately from these HTTP server values.
 		//
-		// Important: Because SSE/HTTP transports are streams, the
-		// WriteTimeout must be disabled because the response "never
-		// finishes".
+		// Important: the WriteTimeout must stay disabled. MCP responses
+		// are SSE streams: tool calls stream notifications before their
+		// result, and `subscriptions/listen` streams hang open by design.
+		//
+		// The IdleTimeout is generous so that keep-alive connections
+		// from MCP clients, load balancer health checks, and scrapes
+		// on typical intervals are reused rather than churned.
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 0,
-		IdleTimeout:  30 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	metricsHandler := promhttp.HandlerFor(

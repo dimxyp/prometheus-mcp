@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/prometheus/common/promslog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -84,6 +86,22 @@ func TestTelemetryMiddleware_Routing(t *testing.T) {
 			},
 			nextErr:        nil,
 			wantLogged:     "MCP server initialized",
+			expectNextCall: true,
+		},
+		{
+			name:   "server/discover method dispatches to discover handler",
+			method: methodServerDiscover,
+			req: mockRequest(&mcp.DiscoverParams{
+				Meta: mcp.Meta{
+					mcp.MetaKeyProtocolVersion: protocolVersionModern,
+					mcp.MetaKeyClientInfo:      &mcp.Implementation{Name: "test-client", Version: "0.1"},
+				},
+			}),
+			nextResult: &mcp.DiscoverResult{
+				SupportedVersions: []string{protocolVersionModern, protocolVersionLegacy},
+			},
+			nextErr:        nil,
+			wantLogged:     "MCP server discovered",
 			expectNextCall: true,
 		},
 		{
@@ -280,7 +298,115 @@ func TestTelemetryHandleInitialize(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			// The handler always returns whatever next returns (possibly nil).
+			require.Equal(t, tc.nextResult, result)
+
+			output := buf.String()
+			require.Contains(t, output, tc.wantLogged)
+			for _, field := range tc.wantLogFields {
+				require.Contains(t, output, field, "expected structured log field value %q in output", field)
+			}
+		})
+	}
+}
+
+func TestTelemetryHandleDiscover(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name          string
+		req           mcp.Request
+		nextResult    mcp.Result
+		nextErr       error
+		wantLogged    string
+		wantLogFields []string
+		wantErr       bool
+	}{
+		{
+			name: "successful discovery logs client info from request _meta",
+			req: mockRequest(&mcp.DiscoverParams{
+				Meta: mcp.Meta{
+					mcp.MetaKeyProtocolVersion: protocolVersionModern,
+					mcp.MetaKeyClientInfo:      &mcp.Implementation{Name: "test-client", Version: "1.0"},
+				},
+			}),
+			nextResult: &mcp.DiscoverResult{
+				SupportedVersions: []string{protocolVersionModern, protocolVersionLegacy},
+			},
+			nextErr:       nil,
+			wantLogged:    "MCP server discovered",
+			wantLogFields: []string{"test-client", `"protocol_version":"` + protocolVersionModern + `"`, protocolVersionLegacy},
+			wantErr:       false,
+		},
+		{
+			name: "client info decoded from wire-shaped _meta",
+			req: mockRequest(&mcp.DiscoverParams{
+				Meta: mcp.Meta{
+					mcp.MetaKeyProtocolVersion: protocolVersionModern,
+					mcp.MetaKeyClientInfo:      map[string]any{"name": "wire-client", "version": "2.0"},
+				},
+			}),
+			nextResult:    &mcp.DiscoverResult{SupportedVersions: []string{protocolVersionModern}},
+			nextErr:       nil,
+			wantLogged:    "MCP server discovered",
+			wantLogFields: []string{"wire-client"},
+			wantErr:       false,
+		},
+		{
+			name:       "successful discovery without params does not panic",
+			req:        mockRequest[*mcp.DiscoverParams](nil),
+			nextResult: &mcp.DiscoverResult{SupportedVersions: []string{protocolVersionModern}},
+			nextErr:    nil,
+			wantLogged: "MCP server discovered",
+			wantErr:    false,
+		},
+		{
+			name:       "nil discover result does not panic",
+			req:        mockRequest(&mcp.DiscoverParams{}),
+			nextResult: (*mcp.DiscoverResult)(nil),
+			nextErr:    nil,
+			wantLogged: "MCP server discovered",
+			wantErr:    false,
+		},
+		{
+			name:       "failed discovery logs error",
+			req:        mockRequest(&mcp.DiscoverParams{}),
+			nextResult: nil,
+			nextErr:    errors.New("discover boom"),
+			wantLogged: "MCP discovery failed",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid request type falls through gracefully",
+			req:        mockRequest(&mcp.PingParams{}),
+			nextResult: &mcp.DiscoverResult{},
+			nextErr:    nil,
+			wantLogged: "Failed to extract discover request for telemetry",
+			wantErr:    false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			logger, buf := newTestLogger()
+
+			nextCalled := false
+			next := func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+				nextCalled = true
+				return tc.nextResult, tc.nextErr
+			}
+
+			result, err := telemetryHandleServerDiscover(context.Background(), methodServerDiscover, tc.req, next, logger)
+
+			require.True(t, nextCalled, "expected next handler to be called")
+
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
 			require.Equal(t, tc.nextResult, result)
 
 			output := buf.String()
@@ -301,8 +427,11 @@ func TestTelemetryHandleToolCall(t *testing.T) {
 		nextResult    mcp.Result
 		nextErr       error
 		wantLogged    string
-		wantLogFields []string // additional substrings expected in log output (structured field values)
+		wantLogFields []string
+		wantNotLogged []string
 		wantErr       bool
+		cancelCtx     bool
+		toolName      string
 	}{
 		{
 			name: "successful tool call logs tool name and duration",
@@ -382,6 +511,32 @@ func TestTelemetryHandleToolCall(t *testing.T) {
 			wantLogged: "Failed to extract tool params for telemetry",
 			wantErr:    false,
 		},
+		{
+			name:          "client cancellation surfacing the context error is not a failure",
+			req:           mockRequest(&mcp.CallToolParamsRaw{Name: "canceled_ctx_err"}),
+			nextResult:    nil,
+			nextErr:       context.Canceled,
+			cancelCtx:     true,
+			toolName:      "canceled_ctx_err",
+			wantLogged:    "Tool call canceled by client",
+			wantNotLogged: []string{"Failed calling tool"},
+			wantErr:       true,
+		},
+		{
+			name: "client cancellation wrapped into a tool error result is not a failure",
+			req:  mockRequest(&mcp.CallToolParamsRaw{Name: "canceled_is_error"}),
+			nextResult: &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{Text: "context canceled"}},
+				IsError: true,
+			},
+			nextErr:       nil,
+			cancelCtx:     true,
+			toolName:      "canceled_is_error",
+			wantLogged:    "Tool call canceled by client",
+			wantLogFields: []string{`"error":"context canceled"`},
+			wantNotLogged: []string{"Failed calling tool"},
+			wantErr:       false,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -391,13 +546,19 @@ func TestTelemetryHandleToolCall(t *testing.T) {
 
 			logger, buf := newTestLogger()
 
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
 			nextCalled := false
 			next := func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 				nextCalled = true
+				if tc.cancelCtx {
+					cancel()
+				}
 				return tc.nextResult, tc.nextErr
 			}
 
-			result, err := telemetryHandleToolCall(context.Background(), methodToolsCall, tc.req, next, logger)
+			result, err := telemetryHandleToolCall(ctx, methodToolsCall, tc.req, next, logger)
 
 			require.True(t, nextCalled, "expected next handler to be called")
 
@@ -413,6 +574,14 @@ func TestTelemetryHandleToolCall(t *testing.T) {
 			require.Contains(t, output, tc.wantLogged)
 			for _, field := range tc.wantLogFields {
 				require.Contains(t, output, field, "expected structured log field value %q in output", field)
+			}
+			for _, s := range tc.wantNotLogged {
+				require.NotContains(t, output, s)
+			}
+			if tc.cancelCtx {
+				counter := metricToolCallsFailed.With(prometheus.Labels{"tool_name": tc.toolName})
+				require.Zero(t, testutil.ToFloat64(counter),
+					"client cancellation must not count as a tool failure")
 			}
 		})
 	}
@@ -499,7 +668,7 @@ func TestTelemetryHandleResourceRead(t *testing.T) {
 
 // TestFullAuthFlow tests the auth flow from a context-stored Authorization
 // value through GetAPIClient to the outgoing Prometheus request. The context
-// value is seeded directly; TestPerRequestAuthForwarding_StatefulHTTP covers
+// value is seeded directly; TestPerRequestAuthForwarding_HTTP covers
 // how it reaches the context from an HTTP request.
 func TestFullAuthFlow(t *testing.T) {
 	t.Parallel()
@@ -874,16 +1043,11 @@ func (rt *rotatingAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response
 	return rt.base.RoundTrip(req)
 }
 
-// TestPerRequestAuthForwarding_StatefulHTTP tests the complete auth flow for
-// a client that rotates credentials mid-session. Handler contexts on the
-// streamable HTTP transport derive from the HTTP request that established
-// the MCP session, so without authForwardingMiddleware every tool call
-// authenticates with the Authorization header sent at initialize time. The
-// test drives a real client/server MCP session over HTTP and verifies that
-// the backend sees the header carried by each tools/call request. A final
-// header-less call verifies that requests without credentials use the
-// default client instead of the session's initialize-time token.
-func TestPerRequestAuthForwarding_StatefulHTTP(t *testing.T) {
+// TestPerRequestAuthForwarding_HTTP drives a client that rotates credentials
+// per call over streamable HTTP. The backend must see the header each
+// tools/call carried, and a final header-less call must fall back to the
+// default client.
+func TestPerRequestAuthForwarding_HTTP(t *testing.T) {
 	t.Parallel()
 
 	var mu sync.Mutex
@@ -905,10 +1069,11 @@ func TestPerRequestAuthForwarding_StatefulHTTP(t *testing.T) {
 		PrometheusURL:     promServer.URL,
 		PrometheusTimeout: 30 * time.Second,
 		RoundTripper:      http.DefaultTransport,
+		Transport:         TransportHTTP,
 	})
 	require.NoError(t, err)
 
-	httpServer := httptest.NewServer(NewStreamableHTTPHandler(server, logger, time.Minute))
+	httpServer := httptest.NewServer(NewStreamableHTTPHandler(server, logger))
 	defer httpServer.Close()
 
 	rt := &rotatingAuthRoundTripper{base: http.DefaultTransport}
