@@ -712,6 +712,37 @@ func TestFullAuthFlow(t *testing.T) {
 		require.Equal(t, "Bearer my-secret-api-token", prometheusReceivedAuth)
 	})
 
+	t.Run("container built without a RoundTripper still forwards auth", func(t *testing.T) {
+		t.Parallel()
+
+		var prometheusReceivedAuth string
+
+		promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			prometheusReceivedAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+		}))
+		defer promServer.Close()
+
+		// Build through the real constructor with no RoundTripper, as a
+		// library caller would, and query through the API client it returns.
+		container, err := newServerContainer(ServerConfig{
+			PrometheusURL: promServer.URL,
+			RoundTripper:  nil,
+			Logger:        promslog.NewNopLogger(),
+		})
+		require.NoError(t, err)
+
+		ctx := addAuthToContext(context.Background(), "Bearer test-token")
+
+		client, _ := container.GetAPIClient(ctx)
+
+		_, _, err = client.Query(ctx, "up", time.Now())
+		require.NoError(t, err)
+
+		require.Equal(t, "Bearer test-token", prometheusReceivedAuth)
+	})
+
 	t.Run("Basic auth flows through to Prometheus API call", func(t *testing.T) {
 		t.Parallel()
 

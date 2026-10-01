@@ -312,7 +312,13 @@ type ServerContainer struct {
 
 // newServerContainer creates a new ServerContainer with the given configuration.
 func newServerContainer(cfg ServerConfig) (*ServerContainer, error) {
-	client, err := mcpProm.NewAPIClient(cfg.PrometheusURL, cfg.RoundTripper)
+	// Auth-forwarding clients wrap the default transport, so it must not be nil.
+	rt := cfg.RoundTripper
+	if rt == nil {
+		rt = http.DefaultTransport
+	}
+
+	client, err := mcpProm.NewAPIClient(cfg.PrometheusURL, rt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create default API client: %w", err)
 	}
@@ -321,8 +327,8 @@ func newServerContainer(cfg ServerConfig) (*ServerContainer, error) {
 		logger:                cfg.Logger,
 		defaultAPIClient:      client,
 		prometheusURL:         cfg.PrometheusURL,
-		defaultRT:             cfg.RoundTripper,
-		defaultHTTPClient:     http.Client{Transport: cfg.RoundTripper},
+		defaultRT:             rt,
+		defaultHTTPClient:     http.Client{Transport: rt},
 		truncationLimit:       cfg.TruncationLimit,
 		toonOutputEnabled:     cfg.ToonOutputEnabled,
 		tsdbAdminToolsEnabled: cfg.TSDBAdminToolsEnabled,
